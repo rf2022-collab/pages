@@ -1,66 +1,480 @@
-import { createServer } from 'http';
-import { spawn } from 'child_process';
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>스컬킹 프로 점수판</title>
+    <style>
+        /* 1. 글로벌 리셋 및 터치 설정 */
+        *, *:before, *:after { 
+            box-sizing: border-box; 
+            -webkit-tap-highlight-color: transparent; 
+        }
 
-// Windows 대응 환경 설정 및 셸 옵션 적용
-const mcp = spawn('npx.cmd', ['-y', '@modelcontextprotocol/server-filesystem', 'D:\\AI\\RAG'], { shell: true });
-mcp.stdout.setEncoding('utf8');
+        :root {
+            --bg: #0a0e17;          
+            --card: #161f30;        
+            --card-inner: #222f47;  
+            --primary: #ffdf00;     
+            --text: #ffffff;
+            --text-muted: #94a3b8;  
+            --danger: #ff3366;      
+            --success: #00e676;     
+            --border: #2e3f5e;      
+        }
 
-// 디버깅용 에러 출력
-mcp.stderr.on('data', (data) => {
-    console.error(`[MCP Error]: ${data}`);
-});
+        /* 안드로이드 먹통 현상을 유발하던 position: fixed 제거 */
+        html, body {
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
 
-// 들어오는 응답들을 순서대로 처리하기 위한 큐(Queue) 관리
-const pendingResponses = [];
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Malgun Gothic", sans-serif;
+            display: flex;
+            flex-direction: column;
+        }
 
-mcp.stdout.on('data', (data) => {
-    // MCP 서버에서 데이터가 출력되면 대기 중인 HTTP 응답에 순서대로 매칭해 반환
-    const res = pendingResponses.shift();
-    if (res) {
-        res.writeHead(200, {
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type, Authorization, Accept, mcp-protocol-version',
-            'Content-Type': 'application/json'
-        });
-        res.end(data);
-    }
-});
+        /* 2. 크로스플랫폼 통합 스크롤 영역 (안드로이드/iOS 공용 구조) */
+        #scrollableContent {
+            flex: 1;               
+            overflow-y: auto;      
+            -webkit-overflow-scrolling: touch; 
+            padding: 16px;         
+            display: flex;
+            flex-direction: column;
+            gap: 16px;             
+        }
 
-createServer((req, res) => {
-    // 기본 CORS 헤더 대응
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, mcp-protocol-version');
-    res.setHeader('Content-Type', 'application/json');
+        .header { text-align: center; }
+        h1 { margin: 5px 0 12px 0; color: var(--primary); font-size: 1.5rem; letter-spacing: 1.5px; font-weight: 900; text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
+        
+        .setup-bar { display: flex; gap: 8px; justify-content: center; }
+        input[type="text"] { 
+            flex: 1; 
+            max-width: 60%; 
+            padding: 12px; 
+            border-radius: 8px; 
+            border: 2px solid var(--border); 
+            background: #0c1322; 
+            color: white; 
+            font-size: 0.95rem; 
+            font-weight: bold;
+            outline: none;
+        }
+        input[type="text"]:focus { border-color: var(--primary); }
+        
+        button { 
+            padding: 12px 16px; 
+            border-radius: 8px; 
+            border: none; 
+            font-weight: bold;
+            cursor: pointer; 
+            font-size: 0.95rem;
+        }
+        .btn-main { background: var(--primary); color: #000; }
+        .btn-main:active { background: #dcb200; }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-danger:active { background: #df1f51; }
 
-    if (req.method === 'OPTIONS') {
-        res.writeHead(200);
-        res.end();
-        return;
-    }
+        /* 누적 점수 섹션 */
+        .user-score-section {
+            background: var(--card);
+            padding: 14px 16px;
+            border-radius: 16px;
+            border: 2px solid var(--border);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .user-score-section h2, .round-score-section h2 { margin: 0 0 12px 0; font-size: 0.85rem; color: var(--text-muted); font-weight: bold; letter-spacing: 1px; }
+        
+        .player-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border);
+            transition: all 0.2s ease;
+        }
+        .player-item:last-child { border-bottom: none; }
+        .player-main { display: flex; align-items: center; gap: 12px; }
+        .player-name { font-weight: bold; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
+        .player-score { font-size: 1.4rem; color: var(--primary); font-weight: 900; text-shadow: 0 0 8px rgba(255,223,0,0.2); }
+        .order-btns { display: flex; flex-direction: column; gap: 2px; }
+        .btn-small { padding: 4px 10px; border-radius: 4px; background: #222f47; color: #fff; font-size: 0.7rem; border: 1px solid var(--border); }
 
-    if (req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => { body += chunk; });
-        req.on('end', () => {
-            // 알림(Notification) 계열의 요청은 보낸 후 응답을 기다리지 않는 특성이 있음
-            if (body.includes('"notifications/initialized"')) {
-                mcp.stdin.write(body + '\n');
-                res.writeHead(200);
-                res.end(JSON.stringify({})); // 빈 응답 즉시 반환하여 세션 유지
-                return;
+        /* --- 추가된 강조 스타일 --- */
+        .player-item.max-score {
+            background: rgba(255, 223, 0, 0.1);
+            border-radius: 8px;
+            border: 1px solid var(--primary);
+            transform: scale(1.02);
+        }
+        .player-item.max-score .player-name { color: var(--primary); }
+        .player-item.max-score .player-score { text-shadow: 0 0 15px rgba(255,223,0,0.6); }
+
+        .player-item.min-score {
+            background: rgba(255, 51, 102, 0.1);
+            border-radius: 8px;
+            border: 1px solid var(--danger);
+        }
+        .player-item.min-score .player-name { color: var(--danger); }
+        /* ------------------------- */
+
+        /* 라운드 히스토리 섹션 */
+        .round-score-section {
+            background: var(--card);
+            padding: 14px 16px;
+            border-radius: 16px;
+            border: 2px solid var(--border);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .round-list { display: flex; flex-direction: column; gap: 12px; }
+        
+        .round-card {
+            background: var(--card-inner);
+            padding: 14px;
+            border-radius: 12px;
+            border-left: 5px solid var(--primary);
+            border-top: 1px solid #31456a;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+        }
+        .round-card:active { background: #2c3d5c; }
+        .round-title { font-weight: 900; margin-bottom: 8px; color: var(--primary); font-size: 0.95rem; }
+        
+        .round-details { 
+            display: flex; 
+            flex-wrap: wrap; 
+            gap: 8px; 
+            font-size: 0.9rem; 
+            align-items: center; 
+        }
+        .detail-item { display: flex; gap: 6px; background: #111a2e; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); }
+
+        /* 3. 하단 고정 영역 (하단 가상 바 대응 포함) */
+        .fixed-bottom {
+            padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); 
+            background: #060910;
+            border-top: 2px solid var(--border);
+            flex-shrink: 0; 
+        }
+        .btn-record { 
+            background: var(--success); 
+            color: #000; 
+            width: 100%; 
+            font-size: 1.2rem; 
+            font-weight: 900;
+            padding: 16px; 
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,230,118,0.3);
+        }
+        .btn-record:active { background: #00b359; }
+
+        /* 모달 팝업 스타일 */
+        #inputModal {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(4, 7, 13, 0.95);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+            z-index: 9999;
+        }
+        .modal-content { 
+            width: 100%; 
+            max-width: 380px; 
+            background: var(--card); 
+            padding: 22px; 
+            border-radius: 20px; 
+            max-height: 85vh;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            display: flex;
+            flex-direction: column;
+            border: 2px solid var(--border);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+        }
+        .modal-input-row { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            margin-bottom: 16px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+        .modal-input-row:last-of-type { border-bottom: none; margin-bottom: 10px; }
+        .modal-input-row span {
+            font-weight: bold;
+            font-size: 1rem;
+            max-width: 80px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: #fff;
+        }
+        .modal-input-group { display: flex; align-items: center; gap: 5px; }
+        .modal-input-group input { 
+            width: 55px; 
+            margin: 0; 
+            padding: 10px 4px; 
+            border-radius: 6px; 
+            border: 2px solid var(--border); 
+            background: #0c1322; 
+            color: #fff; 
+            text-align: center; 
+            font-size: 1rem; 
+            font-weight: 900;
+        }
+        
+        .btn-quick {
+            padding: 8px 8px;
+            border-radius: 6px;
+            border: 1px solid #3b4f74;
+            font-weight: bold;
+            background: #222f47;
+            color: #fff;
+            font-size: 0.8rem;
+            min-width: 42px;
+        }
+        .btn-quick:active { background: var(--primary); color: #000; }
+    </style>
+</head>
+<body>
+
+    <div id="scrollableContent">
+        <div class="header">
+            <h1>스컬킹 점수판</h1>
+            <div class="setup-bar">
+                <input type="text" id="playerNameInput" placeholder="이름 입력" autocomplete="off">
+                <button class="btn-main" onclick="game.addPlayer()">추가</button>
+                <button class="btn-danger" onclick="game.newGame()">초기화</button>
+            </div>
+        </div>
+
+        <div class="user-score-section">
+            <h2>누적 총점 (TOTAL SCORES)</h2>
+            <div id="userScoreList"></div>
+        </div>
+
+        <div class="round-score-section">
+            <h2>라운드 별 기록 (터치해서 수정)</h2>
+            <div class="round-list" id="roundList"></div>
+        </div>
+    </div>
+
+    <div class="fixed-bottom">
+        <button class="btn-record" onclick="game.toggleModal(true)">+ 라운드 결과 기록하기</button>
+    </div>
+
+    <div id="inputModal">
+        <div class="modal-content">
+            <h2 id="modalTitle" style="margin-top:0; color:var(--primary); font-size: 1.2rem; text-align: center; font-weight: 900;">라운드 점수 입력</h2>
+            <div id="modalInputRows"></div>
+            
+            <button class="btn-main" style="width:100%; margin-top:15px; padding: 14px; font-size: 1.05rem;" onclick="game.saveRound()">저장 완료</button>
+            <button id="btnDeleteRound" class="btn-danger" style="width:100%; margin-top:8px; padding: 10px; font-size:0.9rem; display:none;" onclick="game.deleteRound()">이 라운드 삭제</button>
+            <button class="btn-danger" style="width:100%; margin-top:8px; background:none; border:2px solid var(--danger); padding: 10px; font-size:0.9rem;" onclick="game.toggleModal(false)">취소</button>
+        </div>
+    </div>
+
+    <script>
+        class GameEngine {
+            constructor() {
+                this.players = JSON.parse(localStorage.getItem('sk_players_v6')) || [];
+                this.rounds = JSON.parse(localStorage.getItem('sk_rounds_v6')) || [];
+                this.editingRoundIndex = null; 
+                this.render();
             }
 
-            // 일반 요청들은 큐에 집어넣고 MCP 처리 결과를 대기
-            pendingResponses.push(res);
-            mcp.stdin.write(body + '\n');
-        });
-    } else {
-        res.writeHead(405);
-        res.end();
-    }
+            save() {
+                localStorage.setItem('sk_players_v6', JSON.stringify(this.players));
+                localStorage.setItem('sk_rounds_v6', JSON.stringify(this.rounds));
+            }
 
-}).listen(9191, () => {
-    console.log("🚀 연속 통신 규격이 완벽 적용된 로컬 MCP 브릿지가 9191 포트에서 대기 중입니다!");
-});
+            newGame() {
+                if (confirm("모든 게임 데이터를 초기화하고 새로 시작하시겠습니까?")) {
+                    this.players = [];
+                    this.rounds = [];
+                    this.save();
+                    this.render();
+                }
+            }
+
+            addPlayer() {
+                const input = document.getElementById('playerNameInput');
+                if (!input.value.trim()) return;
+                this.players.push({ id: Date.now(), name: input.value.trim(), score: 0 });
+                input.value = '';
+                this.save();
+                this.render();
+            }
+
+            movePlayer(index, direction) {
+                const newIndex = index + direction;
+                if (newIndex < 0 || newIndex >= this.players.length) return;
+                [this.players[index], this.players[newIndex]] = [this.players[newIndex], this.players[index]];
+                this.save();
+                this.render();
+            }
+
+            toggleModal(show, roundIndex = null) {
+                const modal = document.getElementById('inputModal');
+                const btnDelete = document.getElementById('btnDeleteRound');
+                modal.style.display = show ? 'flex' : 'none';
+                
+                if (show) {
+                    this.editingRoundIndex = roundIndex;
+                    const title = document.getElementById('modalTitle');
+                    
+                    if (roundIndex !== null) {
+                        title.innerText = `라운드 수정`;
+                        btnDelete.style.display = 'block'; 
+                    } else {
+                        title.innerText = `새 라운드 (${this.rounds.length + 1}R) 점수 입력`;
+                        btnDelete.style.display = 'none';
+                    }
+                    this.renderModalInputs();
+                } else {
+                    this.editingRoundIndex = null;
+                }
+            }
+
+            renderModalInputs() {
+                const container = document.getElementById('modalInputRows');
+                const currentRound = this.editingRoundIndex !== null ? this.rounds[this.editingRoundIndex] : null;
+
+                container.innerHTML = this.players.map(p => {
+                    const val = currentRound ? (currentRound.results[p.id] || 0) : 0;
+                    return `
+                        <div class="modal-input-row">
+                            <span>${p.name}</span>
+                            <div class="modal-input-group">
+                                <button class="btn-quick" onclick="game.adjustModalScore(this, -50)">-50</button>
+                                <button class="btn-quick" onclick="game.adjustModalScore(this, -10)">-10</button>
+                                <input type="number" class="score-input" data-id="${p.id}" value="${val}">
+                                <button class="btn-quick" onclick="game.adjustModalScore(this, 10)">+10</button>
+                                <button class="btn-quick" onclick="game.adjustModalScore(this, 50)">+50</button>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+
+            adjustModalScore(btnElement, amount) {
+                const input = btnElement.parentElement.querySelector('input');
+                let currentVal = parseInt(input.value) || 0;
+                input.value = currentVal + amount;
+            }
+
+            recalculateScores() {
+                this.players.forEach(p => p.score = 0);
+                this.rounds.forEach(r => {
+                    Object.entries(r.results).forEach(([pid, score]) => {
+                        const player = this.players.find(p => p.id == pid);
+                        if (player) player.score += score;
+                    });
+                });
+            }
+
+            saveRound() {
+                const inputs = document.querySelectorAll('.score-input');
+                if(inputs.length === 0) { alert('플레이어를 먼저 추가해주세요.'); return; }
+                
+                const results = {};
+                inputs.forEach(input => {
+                    results[input.dataset.id] = parseInt(input.value) || 0;
+                });
+
+                if (this.editingRoundIndex !== null) {
+                    this.rounds[this.editingRoundIndex].results = results;
+                } else {
+                    this.rounds.push({ id: Date.now(), results });
+                }
+
+                this.recalculateScores();
+                this.save();
+                this.render();
+                this.toggleModal(false);
+            }
+
+            deleteRound() {
+                if (this.editingRoundIndex !== null && confirm("이 라운드 기록을 일괄 삭제하시겠습니까?")) {
+                    this.rounds.splice(this.editingRoundIndex, 1);
+                    this.recalculateScores();
+                    this.save();
+                    this.render();
+                    this.toggleModal(false);
+                }
+            }
+
+            render() {
+                const userScoreList = document.getElementById('userScoreList');
+                if (this.players.length === 0) {
+                    userScoreList.innerHTML = `<p style="text-align:center; color:var(--text-muted); margin: 10px 0;">위 창에서 플레이어를 먼저 추가하세요.</p>`;
+                } else {
+                    // 최고/최저 점수 계산
+                    const scores = this.players.map(p => p.score);
+                    const maxScore = Math.max(...scores);
+                    const minScore = Math.min(...scores);
+
+                    userScoreList.innerHTML = this.players.map((p, index) => {
+                        let extraClass = "";
+                        if (p.score === maxScore && this.players.length > 1) extraClass = " max-score";
+                        else if (p.score === minScore && this.players.length > 1) extraClass = " min-score";
+
+                        return `
+                            <div class="player-item${extraClass}">
+                                <div class="player-main">
+                                    <div class="order-btns">
+                                        <button class="btn-small" onclick="game.movePlayer(${index}, -1)">▲</button>
+                                        <button class="btn-small" onclick="game.movePlayer(${index}, 1)">▼</button>
+                                    </div>
+                                    <span class="player-name">${p.name}</span>
+                                </div>
+                                <div class="player-score">${p.score.toLocaleString()}</div>
+                            </div>
+                        `;
+                    }).join('');
+                }
+
+                const roundList = document.getElementById('roundList');
+                if (this.rounds.length === 0) {
+                    roundList.innerHTML = `<p style="text-align:center; color:var(--text-muted); margin: 15px 0;">기록된 게임 히스토리가 없습니다.</p>`;
+                } else {
+                    let htmlStr = "";
+                    for (let i = this.rounds.length - 1; i >= 0; i--) {
+                        const r = this.rounds[i];
+                        htmlStr += `
+                            <div class="round-card" onclick="game.toggleModal(true, ${i})">
+                                <div class="round-title">라운드 ${i + 1}</div>
+                                <div class="round-details">
+                                    ${Object.entries(r.results).map(([pid, score]) => {
+                                        const p = this.players.find(pl => pl.id == pid);
+                                        const color = score > 0 ? '#00e676' : (score < 0 ? '#ff3366' : '#94a3b8');
+                                        return `
+                                            <div class="detail-item">
+                                                <span style="color:#a4b3cd">${p ? p.name : '퇴장'}</span> 
+                                                <span style="color:${color}; font-weight:bold;">${score > 0 ? '+' : ''}${score}</span>
+                                            </div>
+                                        `;
+                                    }).join('')}
+                                </div>
+                            </div>
+                        `;
+                    }
+                    roundList.innerHTML = htmlStr;
+                }
+            }
+        }
+
+        const game = new GameEngine();
+    </script>
+</body>
+</html>
